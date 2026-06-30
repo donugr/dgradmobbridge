@@ -1,0 +1,38 @@
+# Node / package manager
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+coverage/
+*.tgz
+
+# TypeScript
+*.tsbuildinfo
+
+# Android
+.gradle/
+android/.gradle/
+android/build/
+android/local.properties
+android/captures/
+
+# iOS
+ios/build/
+ios/DerivedData/
+Pods/
+.symlinks/
+
+# Capacitor / local env
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

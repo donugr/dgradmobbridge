@@ -1,0 +1,795 @@
+package id.donugr.dgradmobbridge;
+
+import android.app.Activity;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.graphics.drawable.Drawable;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.TextView;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdLoader;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.LoadAdError;
+import com.google.android.gms.ads.MobileAds;
+import com.google.android.gms.ads.VideoController;
+import com.google.android.gms.ads.nativead.MediaView;
+import com.google.android.gms.ads.nativead.NativeAd;
+import com.google.android.gms.ads.nativead.NativeAdOptions;
+import com.google.android.gms.ads.nativead.NativeAdView;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+@CapacitorPlugin(name = "DgrAdmobBridge")
+public class DgrAdmobBridgePlugin extends Plugin {
+    private static final String CODE_ADS_DISABLED = "ADS_DISABLED";
+    private static final String CODE_CONFIG_MISSING = "CONFIG_MISSING";
+    private static final String CODE_NOT_READY = "NOT_READY";
+    private static final String CODE_LOAD_FAILED = "LOAD_FAILED";
+    private static final String CODE_APPLICATION_ID_MISSING = "APPLICATION_ID_MISSING";
+    private static final String CODE_APPLICATION_ID_INVALID = "APPLICATION_ID_INVALID";
+    private static final String CODE_APPLICATION_ID_NATIVE_READ_FAILED = "APPLICATION_ID_NATIVE_READ_FAILED";
+    private static final String APPLICATION_ID_METADATA_NAME = "com.google.android.gms.ads.APPLICATION_ID";
+    private static final int DEFAULT_NATIVE_MARGIN_DP = 16;
+
+    private final NativeSlotStore slotStore = new NativeSlotStore();
+    private final Map<String, String> placementAdUnitIds = new ConcurrentHashMap<>();
+    private boolean testMode = false;
+    private String applicationId = "";
+    private String applicationIdSource = "missing";
+    private volatile boolean mobileAdsInitialized = false;
+
+    private static class ApplicationIdResolveResult {
+        final boolean ok;
+        final String code;
+        final String message;
+        final String value;
+        final String source;
+
+        ApplicationIdResolveResult(boolean ok, String code, String message, String value, String source) {
+            this.ok = ok;
+            this.code = code;
+            this.message = message;
+            this.value = value;
+            this.source = source;
+        }
+    }
+
+    private static class NativeCallOptions {
+        final String placementId;
+        final String slotId;
+        final String hostId;
+        final String adUnitId;
+        final long ttlMs;
+        final Integer hostX;
+        final Integer hostY;
+        final Integer hostWidth;
+        final Integer hostHeight;
+        final String hostAnchor;
+
+        NativeCallOptions(
+            String placementId,
+            String slotId,
+            String hostId,
+            String adUnitId,
+            long ttlMs,
+            Integer hostX,
+            Integer hostY,
+            Integer hostWidth,
+            Integer hostHeight,
+            String hostAnchor
+        ) {
+            this.placementId = placementId;
+            this.slotId = slotId;
+            this.hostId = hostId;
+            this.adUnitId = adUnitId;
+            this.ttlMs = ttlMs;
+            this.hostX = hostX;
+            this.hostY = hostY;
+            this.hostWidth = hostWidth;
+            this.hostHeight = hostHeight;
+            this.hostAnchor = hostAnchor;
+        }
+    }
+
+    private JSObject success(String status) {
+        JSObject result = new JSObject();
+        result.put("ok", true);
+        if (!TextUtils.isEmpty(status)) {
+            result.put("status", status);
+        }
+        return result;
+    }
+
+    private JSObject success(String status, JSObject data) {
+        JSObject result = success(status);
+        result.put("data", data);
+        return result;
+    }
+
+    private JSObject failure(String code, String message, String status) {
+        JSObject result = new JSObject();
+        result.put("ok", false);
+        result.put("code", code);
+        result.put("message", message);
+        result.put("status", status);
+        return result;
+    }
+
+    private JSObject readyPayload(boolean ready) {
+        JSObject data = new JSObject();
+        data.put("ready", ready);
+        return data;
+    }
+
+    private void notifyNativeEvent(String placementId, String slotId, String phase, String code, String message) {
+        JSObject payload = new JSObject();
+        payload.put("format", "native");
+        payload.put("placementId", placementId);
+        if (!TextUtils.isEmpty(slotId)) {
+            payload.put("slotId", slotId);
+        }
+        payload.put("phase", phase);
+        if (!TextUtils.isEmpty(code)) {
+            payload.put("code", code);
+        }
+        if (!TextUtils.isEmpty(message)) {
+            payload.put("message", message);
+        }
+        notifyListeners("adEvent", payload);
+    }
+
+    private void notifyNativeLoaded(NativeSlotState slot, String message) {
+        notifyNativeEvent(slot.placementId, slot.slotId, "loaded", null, message);
+    }
+
+    private void notifyNativeFailed(NativeSlotState slot, String code, String message) {
+        notifyNativeEvent(slot.placementId, slot.slotId, "failed", code, message);
+    }
+
+    private void notifyNativeAttached(NativeSlotState slot, String message) {
+        notifyNativeEvent(slot.placementId, slot.slotId, "attached", null, message);
+    }
+
+    private void notifyNativeDetached(NativeSlotState slot, String message) {
+        notifyNativeEvent(slot.placementId, slot.slotId, "detached", null, message);
+    }
+
+    private void notifyNativeClicked(NativeSlotState slot) {
+        notifyNativeEvent(slot.placementId, slot.slotId, "clicked", null, "Native ad clicked.");
+    }
+
+    private void notifyNativeImpression(NativeSlotState slot) {
+        notifyNativeEvent(slot.placementId, slot.slotId, "impression", null, "Native ad impression recorded.");
+    }
+
+    private String requireTrimmed(PluginCall call, String key) {
+        return String.valueOf(call.getString(key, "")).trim();
+    }
+
+    private NativeCallOptions parseNativeOptions(PluginCall call, boolean requirePlacement) {
+        String placementId = requireTrimmed(call, "placementId");
+        String slotId = requireTrimmed(call, "slotId");
+        String hostId = requireTrimmed(call, "hostId");
+        String explicitAdUnitId = requireTrimmed(call, "adUnitId");
+        long ttlMs = call.getLong("ttlMs", 60000L);
+        JSObject hostRect = call.getObject("hostRect");
+        Integer hostX = parseOptionalInt(hostRect, "x");
+        Integer hostY = parseOptionalInt(hostRect, "y");
+        Integer hostWidth = parseOptionalInt(hostRect, "width");
+        Integer hostHeight = parseOptionalInt(hostRect, "height");
+        String hostAnchor = parseHostAnchor(hostRect);
+
+        if (requirePlacement && TextUtils.isEmpty(placementId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "placementId is required.", "error"));
+            return null;
+        }
+
+        if (TextUtils.isEmpty(slotId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "slotId is required.", "error"));
+            return null;
+        }
+
+        if (TextUtils.isEmpty(hostId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "hostId is required.", "error"));
+            return null;
+        }
+
+        String adUnitId = resolveAdUnitId(placementId, explicitAdUnitId);
+        if (TextUtils.isEmpty(adUnitId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "Missing ad unit id for native placement \"" + placementId + "\".", "error"));
+            return null;
+        }
+
+        return new NativeCallOptions(placementId, slotId, hostId, adUnitId, ttlMs, hostX, hostY, hostWidth, hostHeight, hostAnchor);
+    }
+
+    private Integer parseOptionalInt(JSObject object, String key) {
+        if (object == null || !object.has(key)) {
+            return null;
+        }
+
+        try {
+            return object.getInteger(key);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String parseHostAnchor(JSObject hostRect) {
+        if (hostRect == null) {
+            return "top";
+        }
+
+        String anchor = String.valueOf(hostRect.optString("anchor", "top")).trim().toLowerCase();
+        return "bottom".equals(anchor) ? "bottom" : "top";
+    }
+
+    private String resolveAdUnitId(String placementId, String explicitAdUnitId) {
+        if (!TextUtils.isEmpty(explicitAdUnitId)) {
+            return explicitAdUnitId.trim();
+        }
+
+        return String.valueOf(placementAdUnitIds.getOrDefault(placementId, "")).trim();
+    }
+
+    private boolean isValidApplicationId(String value) {
+        return !TextUtils.isEmpty(value) && value.startsWith("ca-app-pub-") && value.contains("~");
+    }
+
+    private ApplicationIdResolveResult resolveApplicationId(String jsApplicationId) {
+        String explicitValue = String.valueOf(jsApplicationId == null ? "" : jsApplicationId).trim();
+        if (!TextUtils.isEmpty(explicitValue)) {
+            if (!isValidApplicationId(explicitValue)) {
+                return new ApplicationIdResolveResult(
+                    false,
+                    CODE_APPLICATION_ID_INVALID,
+                    "Invalid AdMob applicationId from JS configuration. Expected a non-empty AdMob app id such as ca-app-pub-xxxxx~yyyyy.",
+                    "",
+                    "missing"
+                );
+            }
+
+            return new ApplicationIdResolveResult(true, "", "", explicitValue, "js");
+        }
+
+        Bundle metadata;
+        try {
+            PackageManager packageManager = getContext().getPackageManager();
+            ApplicationInfo applicationInfo = packageManager.getApplicationInfo(
+                getContext().getPackageName(),
+                PackageManager.GET_META_DATA
+            );
+            metadata = applicationInfo.metaData;
+        } catch (Exception exception) {
+            return new ApplicationIdResolveResult(
+                false,
+                CODE_APPLICATION_ID_NATIVE_READ_FAILED,
+                "Failed to read AdMob applicationId from Android manifest. Provide configure({ applicationId }) or verify native app metadata.",
+                "",
+                "missing"
+            );
+        }
+
+        String manifestValue = metadata == null ? "" : String.valueOf(metadata.getString(APPLICATION_ID_METADATA_NAME, "")).trim();
+        if (TextUtils.isEmpty(manifestValue)) {
+            return new ApplicationIdResolveResult(
+                false,
+                CODE_APPLICATION_ID_MISSING,
+                "Missing AdMob applicationId. Provide configure({ applicationId }) or set com.google.android.gms.ads.APPLICATION_ID in AndroidManifest.xml.",
+                "",
+                "missing"
+            );
+        }
+
+        if (!isValidApplicationId(manifestValue)) {
+            return new ApplicationIdResolveResult(
+                false,
+                CODE_APPLICATION_ID_INVALID,
+                "Invalid AdMob applicationId from Android manifest. Expected a non-empty AdMob app id such as ca-app-pub-xxxxx~yyyyy.",
+                "",
+                "missing"
+            );
+        }
+
+        return new ApplicationIdResolveResult(true, "", "", manifestValue, "android_manifest");
+    }
+
+    private synchronized void ensureMobileAdsInitialized() {
+        if (mobileAdsInitialized) {
+            return;
+        }
+
+        Activity activity = getActivity();
+        if (activity != null) {
+            MobileAds.initialize(activity);
+        } else if (getContext() != null) {
+            MobileAds.initialize(getContext());
+        }
+        mobileAdsInitialized = true;
+    }
+
+    private AdRequest buildAdRequest() {
+        return new AdRequest.Builder().build();
+    }
+
+    private NativeSlotState getOrCreateSlot(String slotId, String placementId, String hostId, String adUnitId, long ttlMs) {
+        NativeSlotState slot = slotStore.getOrCreate(slotId);
+        slot.updateIdentity(placementId, hostId, adUnitId, ttlMs);
+        slotStore.put(slot);
+        return slot;
+    }
+
+    private boolean isSlotReusable(NativeSlotState slot) {
+        return slot != null && slot.isReady(System.currentTimeMillis());
+    }
+
+    private int dpToPx(int dp) {
+        float density = getContext() != null ? getContext().getResources().getDisplayMetrics().density : 1f;
+        return Math.round(dp * density);
+    }
+
+    private void applyHostContainerLayout(FrameLayout hostContainer, NativeCallOptions options) {
+        FrameLayout.LayoutParams params;
+        ViewGroup.LayoutParams currentParams = hostContainer.getLayoutParams();
+        if (currentParams instanceof FrameLayout.LayoutParams) {
+            params = (FrameLayout.LayoutParams) currentParams;
+        } else {
+            params = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            );
+        }
+
+        if (options.hostX != null && options.hostY != null && options.hostWidth != null && options.hostWidth > 0) {
+            params.width = options.hostWidth;
+            params.height = FrameLayout.LayoutParams.WRAP_CONTENT;
+            params.gravity = Gravity.TOP | Gravity.START;
+            params.leftMargin = Math.max(0, options.hostX);
+            params.rightMargin = 0;
+            int anchoredTop = Math.max(0, options.hostY);
+            if ("bottom".equals(options.hostAnchor) && options.hostHeight != null && options.hostHeight > 0) {
+                anchoredTop += options.hostHeight;
+            }
+            params.topMargin = anchoredTop;
+            params.bottomMargin = 0;
+        } else {
+            params.width = FrameLayout.LayoutParams.MATCH_PARENT;
+            params.height = FrameLayout.LayoutParams.WRAP_CONTENT;
+            params.gravity = Gravity.BOTTOM;
+            int margin = dpToPx(DEFAULT_NATIVE_MARGIN_DP);
+            params.leftMargin = margin;
+            params.rightMargin = margin;
+            params.bottomMargin = margin;
+            params.topMargin = 0;
+        }
+
+        hostContainer.setLayoutParams(params);
+    }
+
+    private ViewGroup resolveNativeHostContainer(NativeCallOptions options) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            return null;
+        }
+
+        ViewGroup contentRoot = activity.findViewById(android.R.id.content);
+        if (contentRoot == null) {
+            return null;
+        }
+
+        String overlayTag = "dgradmobbridge:host:" + options.hostId;
+        View existing = contentRoot.findViewWithTag(overlayTag);
+        if (existing instanceof FrameLayout) {
+            FrameLayout existingContainer = (FrameLayout) existing;
+            applyHostContainerLayout(existingContainer, options);
+            return existingContainer;
+        }
+
+        FrameLayout hostContainer = new FrameLayout(activity);
+        hostContainer.setTag(overlayTag);
+        applyHostContainerLayout(hostContainer, options);
+        hostContainer.setClickable(false);
+        hostContainer.setFocusable(false);
+        contentRoot.addView(hostContainer);
+        return hostContainer;
+    }
+
+    private void cleanupSlotView(NativeSlotState slot) {
+        if (slot == null) {
+            return;
+        }
+
+        if (slot.attachedView != null && slot.attachedView.getParent() instanceof ViewGroup) {
+            ((ViewGroup) slot.attachedView.getParent()).removeView(slot.attachedView);
+        }
+        slot.clearViewReference();
+    }
+
+    private void cleanupSlotAd(NativeSlotState slot) {
+        if (slot == null) {
+            return;
+        }
+
+        slot.clearAdReference();
+        if (!NativeSlotState.STATUS_FAILED.equals(slot.status)) {
+            slot.status = NativeSlotState.STATUS_IDLE;
+        }
+        slot.loading = false;
+    }
+
+    private void cleanupSlot(NativeSlotState slot) {
+        cleanupSlotView(slot);
+        cleanupSlotAd(slot);
+    }
+
+    private void cleanupAndRemoveSlot(String slotId) {
+        NativeSlotState slot = slotStore.remove(slotId);
+        cleanupSlot(slot);
+    }
+
+    private void applyPlacements(JSObject placements) {
+        placementAdUnitIds.clear();
+        if (placements == null) {
+            return;
+        }
+
+        Iterator<String> keys = placements.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            String value = String.valueOf(placements.optString(key, "")).trim();
+            if (!TextUtils.isEmpty(key) && !TextUtils.isEmpty(value)) {
+                placementAdUnitIds.put(key, value);
+            }
+        }
+    }
+
+    private NativeAdView inflateNativeAdView() {
+        Activity activity = getActivity();
+        if (activity == null) {
+            return null;
+        }
+
+        return (NativeAdView) LayoutInflater.from(activity).inflate(R.layout.dgr_native_ad, null);
+    }
+
+    private void bindOptionalText(TextView view, String value) {
+        if (view == null) {
+            return;
+        }
+
+        if (TextUtils.isEmpty(value)) {
+            view.setVisibility(View.GONE);
+            view.setText("");
+            return;
+        }
+
+        view.setVisibility(View.VISIBLE);
+        view.setText(value);
+    }
+
+    private void bindOptionalDrawable(ImageView view, Drawable drawable) {
+        if (view == null) {
+            return;
+        }
+
+        if (drawable == null) {
+            view.setVisibility(View.GONE);
+            view.setImageDrawable(null);
+            return;
+        }
+
+        view.setVisibility(View.VISIBLE);
+        view.setImageDrawable(drawable);
+    }
+
+    private NativeAdView createAndBindNativeAdView(NativeSlotState slot) {
+        NativeAdView adView = inflateNativeAdView();
+        if (adView == null || slot.nativeAd == null) {
+            return null;
+        }
+
+        TextView headlineView = adView.findViewById(R.id.ad_headline);
+        TextView bodyView = adView.findViewById(R.id.ad_body);
+        Button ctaView = adView.findViewById(R.id.ad_call_to_action);
+        ImageView iconView = adView.findViewById(R.id.ad_app_icon);
+        TextView badgeView = adView.findViewById(R.id.ad_badge);
+        MediaView mediaView = adView.findViewById(R.id.ad_media);
+
+        adView.setHeadlineView(headlineView);
+        adView.setBodyView(bodyView);
+        adView.setCallToActionView(ctaView);
+        adView.setIconView(iconView);
+        adView.setMediaView(mediaView);
+
+        bindOptionalText(headlineView, slot.nativeAd.getHeadline());
+        bindOptionalText(bodyView, slot.nativeAd.getBody());
+        bindOptionalText(ctaView, slot.nativeAd.getCallToAction());
+        bindOptionalText(badgeView, "Ad");
+        bindOptionalDrawable(iconView, slot.nativeAd.getIcon() != null ? slot.nativeAd.getIcon().getDrawable() : null);
+
+        if (slot.nativeAd.getMediaContent() != null) {
+            mediaView.setVisibility(View.VISIBLE);
+            mediaView.setMediaContent(slot.nativeAd.getMediaContent());
+            VideoController videoController = slot.nativeAd.getMediaContent().getVideoController();
+            if (videoController != null) {
+                videoController.setVideoLifecycleCallbacks(new VideoController.VideoLifecycleCallbacks() {
+                });
+            }
+        } else {
+            mediaView.setVisibility(View.GONE);
+        }
+
+        adView.setNativeAd(slot.nativeAd);
+        return adView;
+    }
+
+    private void startNativeLoad(NativeSlotState slot, long requestToken) {
+        Activity activity = getActivity();
+        if (activity == null) {
+            slot.markFailed(CODE_LOAD_FAILED, "Activity is unavailable for native ad loading.");
+            notifyNativeFailed(slot, CODE_LOAD_FAILED, slot.lastErrorMessage);
+            return;
+        }
+
+        AdLoader adLoader = new AdLoader.Builder(activity, slot.adUnitId)
+            .forNativeAd(nativeAd -> activity.runOnUiThread(() -> {
+                NativeSlotState current = slotStore.get(slot.slotId);
+                if (current == null || !current.matchesActiveRequest(requestToken)) {
+                    nativeAd.destroy();
+                    return;
+                }
+
+                current.markReady(nativeAd, System.currentTimeMillis());
+                notifyNativeLoaded(current, "Native ad loaded.");
+            }))
+            .withNativeAdOptions(new NativeAdOptions.Builder().build())
+            .withAdListener(new AdListener() {
+                @Override
+                public void onAdClicked() {
+                    NativeSlotState current = slotStore.get(slot.slotId);
+                    if (current != null) {
+                        notifyNativeClicked(current);
+                    }
+                }
+
+                @Override
+                public void onAdImpression() {
+                    NativeSlotState current = slotStore.get(slot.slotId);
+                    if (current != null) {
+                        notifyNativeImpression(current);
+                    }
+                }
+
+                @Override
+                public void onAdFailedToLoad(LoadAdError loadAdError) {
+                    activity.runOnUiThread(() -> {
+                        NativeSlotState current = slotStore.get(slot.slotId);
+                        if (current == null || !current.matchesActiveRequest(requestToken)) {
+                            return;
+                        }
+
+                        String code = String.valueOf(loadAdError.getCode());
+                        String message = loadAdError.getMessage();
+                        current.markFailed(code, message);
+                        notifyNativeFailed(current, code, message);
+                    });
+                }
+            })
+            .build();
+
+        adLoader.loadAd(buildAdRequest());
+    }
+
+    @PluginMethod
+    public void configure(PluginCall call) {
+        boolean enabled = call.getBoolean("enabled", false);
+        testMode = call.getBoolean("testMode", false);
+        String jsApplicationId = requireTrimmed(call, "applicationId");
+        applyPlacements(call.getObject("placements", new JSObject()));
+
+        if (!enabled) {
+            applicationId = "";
+            applicationIdSource = "missing";
+            for (NativeSlotState slot : slotStore.snapshot().values()) {
+                cleanupSlot(slot);
+            }
+            slotStore.setEnabled(false);
+            slotStore.clear();
+            call.resolve(success("disabled"));
+            return;
+        }
+
+        ApplicationIdResolveResult applicationIdResult = resolveApplicationId(jsApplicationId);
+        if (!applicationIdResult.ok) {
+            applicationId = "";
+            applicationIdSource = "missing";
+            slotStore.setEnabled(false);
+            call.resolve(failure(applicationIdResult.code, applicationIdResult.message, "error"));
+            return;
+        }
+
+        applicationId = applicationIdResult.value;
+        applicationIdSource = applicationIdResult.source;
+        slotStore.setEnabled(true);
+        ensureMobileAdsInitialized();
+        call.resolve(success("ready"));
+    }
+
+    @PluginMethod
+    public void getRuntimeInfo(PluginCall call) {
+        JSObject data = new JSObject();
+        data.put("platform", "android");
+        data.put("enabled", slotStore.isEnabled());
+        data.put("testMode", testMode);
+        data.put("applicationIdConfigured", !TextUtils.isEmpty(applicationId));
+        data.put("applicationIdSource", applicationIdSource);
+        call.resolve(success(slotStore.isEnabled() ? "ready" : "disabled", data));
+    }
+
+    @PluginMethod
+    public void preloadNative(PluginCall call) {
+        if (!slotStore.isEnabled()) {
+            call.resolve(failure(CODE_ADS_DISABLED, "Ads bridge is disabled.", "disabled"));
+            return;
+        }
+
+        NativeCallOptions options = parseNativeOptions(call, true);
+        if (options == null) {
+            return;
+        }
+
+        ensureMobileAdsInitialized();
+
+        NativeSlotState slot = getOrCreateSlot(options.slotId, options.placementId, options.hostId, options.adUnitId, options.ttlMs);
+        if (slot.isLoading()) {
+            call.resolve(success("loading"));
+            return;
+        }
+
+        if (isSlotReusable(slot)) {
+            call.resolve(success("ready"));
+            return;
+        }
+
+        cleanupSlot(slot);
+        long requestToken = slot.markLoading();
+        startNativeLoad(slot, requestToken);
+        call.resolve(success("loading"));
+    }
+
+    @PluginMethod
+    public void isNativeReady(PluginCall call) {
+        String slotId = requireTrimmed(call, "slotId");
+        if (TextUtils.isEmpty(slotId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "slotId is required.", "error"));
+            return;
+        }
+
+        NativeSlotState slot = slotStore.get(slotId);
+        boolean ready = slot != null && slot.isReady(System.currentTimeMillis());
+        call.resolve(success(ready ? "ready" : "not_ready", readyPayload(ready)));
+    }
+
+    @PluginMethod
+    public void attachNative(PluginCall call) {
+        if (!slotStore.isEnabled()) {
+            call.resolve(failure(CODE_ADS_DISABLED, "Ads bridge is disabled.", "disabled"));
+            return;
+        }
+
+        NativeCallOptions options = parseNativeOptions(call, true);
+        if (options == null) {
+            return;
+        }
+
+        NativeSlotState slot = slotStore.get(options.slotId);
+        if (slot == null || !slot.isReady(System.currentTimeMillis())) {
+            call.resolve(failure(CODE_NOT_READY, "Native slot is not ready yet.", "not_ready"));
+            return;
+        }
+
+        ViewGroup hostContainer = resolveNativeHostContainer(options);
+        if (hostContainer == null) {
+            slot.markFailed(CODE_NOT_READY, "Unable to resolve native host container.");
+            notifyNativeFailed(slot, CODE_NOT_READY, slot.lastErrorMessage);
+            call.resolve(failure(CODE_NOT_READY, slot.lastErrorMessage, "not_ready"));
+            return;
+        }
+
+        cleanupSlotView(slot);
+        NativeAdView adView = createAndBindNativeAdView(slot);
+        if (adView == null) {
+            slot.markFailed(CODE_NOT_READY, "Unable to inflate native ad view.");
+            notifyNativeFailed(slot, CODE_NOT_READY, slot.lastErrorMessage);
+            call.resolve(failure(CODE_NOT_READY, slot.lastErrorMessage, "not_ready"));
+            return;
+        }
+
+        hostContainer.removeAllViews();
+        hostContainer.addView(adView);
+        slot.updateIdentity(options.placementId, options.hostId, options.adUnitId, options.ttlMs);
+        slot.markAttached(options.hostId, adView);
+        notifyNativeAttached(slot, "Native ad attached.");
+        call.resolve(success("ready"));
+    }
+
+    @PluginMethod
+    public void detachNative(PluginCall call) {
+        String slotId = requireTrimmed(call, "slotId");
+        if (TextUtils.isEmpty(slotId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "slotId is required.", "error"));
+            return;
+        }
+
+        NativeSlotState slot = slotStore.get(slotId);
+        if (slot == null) {
+            call.resolve(success("not_ready"));
+            return;
+        }
+
+        cleanupSlotView(slot);
+        slot.markDetached();
+        notifyNativeDetached(slot, "Native slot detached.");
+        call.resolve(success(slot.isReady(System.currentTimeMillis()) ? "ready" : "not_ready"));
+    }
+
+    @PluginMethod
+    public void destroyNative(PluginCall call) {
+        String slotId = requireTrimmed(call, "slotId");
+        if (TextUtils.isEmpty(slotId)) {
+            call.resolve(failure(CODE_CONFIG_MISSING, "slotId is required.", "error"));
+            return;
+        }
+
+        NativeSlotState slot = slotStore.get(slotId);
+        if (slot != null) {
+            notifyNativeDetached(slot, "Native slot destroyed.");
+        }
+        cleanupAndRemoveSlot(slotId);
+        call.resolve(success("ready"));
+    }
+
+    @PluginMethod
+    public void refreshNative(PluginCall call) {
+        if (!slotStore.isEnabled()) {
+            call.resolve(failure(CODE_ADS_DISABLED, "Ads bridge is disabled.", "disabled"));
+            return;
+        }
+
+        NativeCallOptions options = parseNativeOptions(call, true);
+        if (options == null) {
+            return;
+        }
+
+        cleanupAndRemoveSlot(options.slotId);
+        ensureMobileAdsInitialized();
+
+        NativeSlotState slot = getOrCreateSlot(options.slotId, options.placementId, options.hostId, options.adUnitId, options.ttlMs);
+        long requestToken = slot.markLoading();
+        startNativeLoad(slot, requestToken);
+        call.resolve(success("loading"));
+    }
+
+    @PluginMethod
+    public void clearAll(PluginCall call) {
+        for (NativeSlotState slot : slotStore.snapshot().values()) {
+            cleanupSlot(slot);
+        }
+        slotStore.clear();
+        call.resolve(success(slotStore.isEnabled() ? "ready" : "disabled"));
+    }
+}
