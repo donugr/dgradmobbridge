@@ -149,6 +149,11 @@ Expected phases include:
 - `failed`
 - `attached`
 - `detached`
+- `preload_start`
+- `preload_reused`
+- `preload_skip_loading`
+- `attach_skipped_same_host`
+- `layout_skipped_same_rect`
 - `clicked`
 - `impression`
 - `shown`
@@ -195,6 +200,7 @@ Current maturity:
 - standard ads facade foundation is implemented
 - Android native ads loading and host rendering foundation is implemented
 - native ads host bridge contract is implemented
+- Android native attach now skips identical host re-attach work and clears native resources on activity destroy
 - iOS native ads parity is still in progress
 
 ## Installation

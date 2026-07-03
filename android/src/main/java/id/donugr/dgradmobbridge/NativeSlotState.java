@@ -22,6 +22,7 @@ class NativeSlotState {
     NativeAd nativeAd;
     NativeAdView attachedView;
     String attachedHostId;
+    String attachedHostRectFingerprint;
     boolean loading;
     long activeRequestToken;
     long requestCounter;
@@ -39,6 +40,7 @@ class NativeSlotState {
         this.nativeAd = null;
         this.attachedView = null;
         this.attachedHostId = "";
+        this.attachedHostRectFingerprint = "";
         this.loading = false;
         this.activeRequestToken = 0L;
         this.requestCounter = 0L;
@@ -95,9 +97,10 @@ class NativeSlotState {
         this.lastErrorMessage = "";
     }
 
-    void markAttached(String hostId, NativeAdView attachedView) {
+    void markAttached(String hostId, String hostRectFingerprint, NativeAdView attachedView) {
         this.hostId = hostId;
         this.attachedHostId = hostId;
+        this.attachedHostRectFingerprint = hostRectFingerprint == null ? "" : hostRectFingerprint;
         this.attachedView = attachedView;
         this.status = STATUS_ATTACHED;
         this.loading = false;
@@ -130,9 +133,20 @@ class NativeSlotState {
     void clearViewReference() {
         attachedView = null;
         attachedHostId = "";
+        attachedHostRectFingerprint = "";
     }
 
     boolean matchesActiveRequest(long requestToken) {
         return activeRequestToken == requestToken;
+    }
+
+    boolean isAttachedToHost(String hostId, String hostRectFingerprint, long nowMs) {
+        if (!isReady(nowMs) || attachedView == null || !STATUS_ATTACHED.equals(status)) {
+            return false;
+        }
+
+        String safeHostId = hostId == null ? "" : hostId;
+        String safeHostRectFingerprint = hostRectFingerprint == null ? "" : hostRectFingerprint;
+        return safeHostId.equals(attachedHostId) && safeHostRectFingerprint.equals(attachedHostRectFingerprint);
     }
 }

@@ -183,6 +183,10 @@ public class DgrAdmobBridgePlugin extends Plugin {
         notifyNativeEvent(slot.placementId, slot.slotId, "impression", null, "Native ad impression recorded.");
     }
 
+    private void notifyNativeDebug(String placementId, String slotId, String phase, String message) {
+        notifyNativeEvent(placementId, slotId, phase, null, message);
+    }
+
     private String requireTrimmed(PluginCall call, String key) {
         return String.valueOf(call.getString(key, "")).trim();
     }
@@ -247,6 +251,30 @@ public class DgrAdmobBridgePlugin extends Plugin {
 
     private int resolvePlacementsConfiguredCount() {
         return placementAdUnitIds.size();
+    }
+
+    private int resolveActiveSlotsCount() {
+        return slotStore.snapshot().size();
+    }
+
+    private int resolveLoadingSlotsCount() {
+        int count = 0;
+        for (NativeSlotState slot : slotStore.snapshot().values()) {
+            if (slot != null && slot.isLoading()) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    private int resolveAttachedSlotsCount() {
+        int count = 0;
+        for (NativeSlotState slot : slotStore.snapshot().values()) {
+            if (slot != null && NativeSlotState.STATUS_ATTACHED.equals(slot.status) && slot.attachedView != null) {
+                count += 1;
+            }
+        }
+        return count;
     }
 
     private String resolveAdUnitId(String placementId, String explicitAdUnitId) {
@@ -352,8 +380,30 @@ public class DgrAdmobBridgePlugin extends Plugin {
         return slot;
     }
 
+    private boolean hasLoadingSlotForPlacement(String placementId, String excludeSlotId) {
+        for (NativeSlotState slot : slotStore.snapshot().values()) {
+            if (
+                slot != null &&
+                slot.isLoading() &&
+                placementId.equals(slot.placementId) &&
+                !slot.slotId.equals(excludeSlotId)
+            ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean isSlotReusable(NativeSlotState slot) {
         return slot != null && slot.isReady(System.currentTimeMillis());
+    }
+
+    private String buildHostRectFingerprint(NativeCallOptions options) {
+        return String.valueOf(options.hostX) + "|" +
+            String.valueOf(options.hostY) + "|" +
+            String.valueOf(options.hostWidth) + "|" +
+            String.valueOf(options.hostHeight) + "|" +
+            String.valueOf(options.hostAnchor);
     }
 
     private int dpToPx(int dp) {
@@ -387,17 +437,16 @@ public class DgrAdmobBridgePlugin extends Plugin {
         }
     }
 
-    private void applyHostContainerLayout(FrameLayout hostContainer, NativeCallOptions options) {
-        FrameLayout.LayoutParams params;
-        ViewGroup.LayoutParams currentParams = hostContainer.getLayoutParams();
-        if (currentParams instanceof FrameLayout.LayoutParams) {
-            params = (FrameLayout.LayoutParams) currentParams;
-        } else {
-            params = new FrameLayout.LayoutParams(
+    private boolean applyHostContainerLayout(FrameLayout hostContainer, NativeCallOptions options) {
+        FrameLayout.LayoutParams existingParams = hostContainer.getLayoutParams() instanceof FrameLayout.LayoutParams
+            ? (FrameLayout.LayoutParams) hostContainer.getLayoutParams()
+            : null;
+        FrameLayout.LayoutParams params = existingParams == null
+            ? new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT
-            );
-        }
+            )
+            : new FrameLayout.LayoutParams(existingParams);
 
         if (options.hostX != null && options.hostY != null && options.hostWidth != null && options.hostWidth > 0) {
             params.width = options.hostWidth;
@@ -422,7 +471,26 @@ public class DgrAdmobBridgePlugin extends Plugin {
             params.topMargin = 0;
         }
 
-        hostContainer.setLayoutParams(params);
+        boolean changed = existingParams == null || !layoutParamsEquivalent(existingParams, params);
+
+        if (changed) {
+            hostContainer.setLayoutParams(params);
+        }
+        return changed;
+    }
+
+    private boolean layoutParamsEquivalent(FrameLayout.LayoutParams current, FrameLayout.LayoutParams next) {
+        if (current == null || next == null) {
+            return false;
+        }
+
+        return current.width == next.width &&
+            current.height == next.height &&
+            current.gravity == next.gravity &&
+            current.leftMargin == next.leftMargin &&
+            current.topMargin == next.topMargin &&
+            current.rightMargin == next.rightMargin &&
+            current.bottomMargin == next.bottomMargin;
     }
 
     private ViewGroup resolveNativeHostContainer(NativeCallOptions options) {
@@ -440,7 +508,6 @@ public class DgrAdmobBridgePlugin extends Plugin {
         View existing = contentRoot.findViewWithTag(overlayTag);
         if (existing instanceof FrameLayout) {
             FrameLayout existingContainer = (FrameLayout) existing;
-            applyHostContainerLayout(existingContainer, options);
             return existingContainer;
         }
 
@@ -471,6 +538,28 @@ public class DgrAdmobBridgePlugin extends Plugin {
         if (containerParent instanceof ViewGroup) {
             ((ViewGroup) containerParent).removeView(parentView);
         }
+    }
+
+    private void clearAllHostContainers() {
+        Activity activity = getActivity();
+        if (activity == null) {
+            return;
+        }
+
+        runOnUiThreadBlocking(activity, () -> {
+            ViewGroup contentRoot = activity.findViewById(android.R.id.content);
+            if (contentRoot == null) {
+                return;
+            }
+
+            for (int index = contentRoot.getChildCount() - 1; index >= 0; index -= 1) {
+                View child = contentRoot.getChildAt(index);
+                Object tag = child == null ? null : child.getTag();
+                if (tag instanceof String && String.valueOf(tag).startsWith(HOST_CONTAINER_TAG_PREFIX)) {
+                    contentRoot.removeViewAt(index);
+                }
+            }
+        });
     }
 
     private void cleanupSlotView(NativeSlotState slot) {
@@ -504,6 +593,14 @@ public class DgrAdmobBridgePlugin extends Plugin {
     private void cleanupSlot(NativeSlotState slot) {
         cleanupSlotView(slot);
         cleanupSlotAd(slot);
+    }
+
+    private void clearAllSlotsInternal() {
+        for (NativeSlotState slot : slotStore.snapshot().values()) {
+            cleanupSlot(slot);
+        }
+        clearAllHostContainers();
+        slotStore.clear();
     }
 
     private void cleanupAndRemoveSlot(String slotId) {
@@ -674,11 +771,8 @@ public class DgrAdmobBridgePlugin extends Plugin {
         if (!enabled) {
             applicationId = "";
             applicationIdSource = "missing";
-            for (NativeSlotState slot : slotStore.snapshot().values()) {
-                cleanupSlot(slot);
-            }
+            clearAllSlotsInternal();
             slotStore.setEnabled(false);
-            slotStore.clear();
             call.resolve(success("disabled"));
             return;
         }
@@ -687,6 +781,7 @@ public class DgrAdmobBridgePlugin extends Plugin {
         if (!applicationIdResult.ok) {
             applicationId = "";
             applicationIdSource = "missing";
+            clearAllSlotsInternal();
             slotStore.setEnabled(false);
             call.resolve(failure(applicationIdResult.code, applicationIdResult.message, "error"));
             return;
@@ -709,6 +804,9 @@ public class DgrAdmobBridgePlugin extends Plugin {
         data.put("applicationIdSource", applicationIdSource);
         data.put("usingTestDevice", false);
         data.put("placementsConfigured", resolvePlacementsConfiguredCount());
+        data.put("activeSlots", resolveActiveSlotsCount());
+        data.put("loadingSlots", resolveLoadingSlotsCount());
+        data.put("attachedSlots", resolveAttachedSlotsCount());
         call.resolve(success(slotStore.isEnabled() ? "ready" : "disabled", data));
     }
 
@@ -728,17 +826,26 @@ public class DgrAdmobBridgePlugin extends Plugin {
 
         NativeSlotState slot = getOrCreateSlot(options.slotId, options.placementId, options.hostId, options.adUnitId, options.ttlMs);
         if (slot.isLoading()) {
+            notifyNativeDebug(options.placementId, options.slotId, "preload_skip_loading", "Native preload skipped because this slot is already loading.");
             call.resolve(success("loading"));
             return;
         }
 
         if (isSlotReusable(slot)) {
+            notifyNativeDebug(options.placementId, options.slotId, "preload_reused", "Native preload reused the current ready slot.");
             call.resolve(success("ready"));
+            return;
+        }
+
+        if (hasLoadingSlotForPlacement(options.placementId, options.slotId)) {
+            notifyNativeDebug(options.placementId, options.slotId, "preload_skip_loading", "Native preload skipped because another slot for this placement is already loading.");
+            call.resolve(success("loading"));
             return;
         }
 
         cleanupSlot(slot);
         long requestToken = slot.markLoading();
+        notifyNativeDebug(options.placementId, options.slotId, "preload_start", "Native preload started.");
         startNativeLoad(slot, requestToken);
         call.resolve(success("loading"));
     }
@@ -782,6 +889,18 @@ public class DgrAdmobBridgePlugin extends Plugin {
             return;
         }
 
+        String hostRectFingerprint = buildHostRectFingerprint(options);
+        if (
+            slot.isAttachedToHost(options.hostId, hostRectFingerprint, System.currentTimeMillis()) &&
+            slot.attachedView != null &&
+            slot.attachedView.getParent() instanceof ViewGroup
+        ) {
+            notifyNativeDebug(options.placementId, options.slotId, "layout_skipped_same_rect", "Native host layout unchanged for this slot.");
+            notifyNativeDebug(options.placementId, options.slotId, "attach_skipped_same_host", "Native attach skipped because the slot is already attached to the same host.");
+            call.resolve(success("ready"));
+            return;
+        }
+
         AtomicReference<JSObject> resultRef = new AtomicReference<>();
         runOnUiThreadBlocking(activity, () -> {
             ViewGroup hostContainer = resolveNativeHostContainer(options);
@@ -801,10 +920,16 @@ public class DgrAdmobBridgePlugin extends Plugin {
                 return;
             }
 
+            if (hostContainer instanceof FrameLayout) {
+                boolean changed = applyHostContainerLayout((FrameLayout) hostContainer, options);
+                if (!changed) {
+                    notifyNativeDebug(options.placementId, options.slotId, "layout_skipped_same_rect", "Native host layout unchanged for this slot.");
+                }
+            }
             hostContainer.removeAllViews();
             hostContainer.addView(adView);
             slot.updateIdentity(options.placementId, options.hostId, options.adUnitId, options.ttlMs);
-            slot.markAttached(options.hostId, adView);
+            slot.markAttached(options.hostId, hostRectFingerprint, adView);
             notifyNativeAttached(slot, "Native ad attached.");
             resultRef.set(success("ready"));
         });
@@ -861,21 +986,38 @@ public class DgrAdmobBridgePlugin extends Plugin {
             return;
         }
 
+        NativeSlotState currentSlot = slotStore.get(options.slotId);
+        if (currentSlot != null && currentSlot.isLoading()) {
+            notifyNativeDebug(options.placementId, options.slotId, "preload_skip_loading", "Native refresh skipped because this slot is already loading.");
+            call.resolve(success("loading"));
+            return;
+        }
+
+        if (hasLoadingSlotForPlacement(options.placementId, options.slotId)) {
+            notifyNativeDebug(options.placementId, options.slotId, "preload_skip_loading", "Native refresh skipped because another slot for this placement is already loading.");
+            call.resolve(success("loading"));
+            return;
+        }
+
         cleanupAndRemoveSlot(options.slotId);
         ensureMobileAdsInitialized();
 
         NativeSlotState slot = getOrCreateSlot(options.slotId, options.placementId, options.hostId, options.adUnitId, options.ttlMs);
         long requestToken = slot.markLoading();
+        notifyNativeDebug(options.placementId, options.slotId, "preload_start", "Native refresh started a new preload.");
         startNativeLoad(slot, requestToken);
         call.resolve(success("loading"));
     }
 
     @PluginMethod
     public void clearAll(PluginCall call) {
-        for (NativeSlotState slot : slotStore.snapshot().values()) {
-            cleanupSlot(slot);
-        }
-        slotStore.clear();
+        clearAllSlotsInternal();
         call.resolve(success(slotStore.isEnabled() ? "ready" : "disabled"));
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        clearAllSlotsInternal();
+        super.handleOnDestroy();
     }
 }

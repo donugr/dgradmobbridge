@@ -60,6 +60,7 @@ Expected outcomes:
 
 - `loading`
 - later `loaded` event
+- optional `preload_start`, `preload_reused`, or `preload_skip_loading` telemetry events
 - or `failed`
 
 ## Attach
@@ -74,6 +75,7 @@ Expected outcomes:
 
 - `ready` on attach success
 - `attached` event
+- optional `attach_skipped_same_host` and `layout_skipped_same_rect` telemetry when the plugin detects an identical re-attach
 
 ## Detach
 
@@ -94,6 +96,8 @@ Use `destroyNative()` when:
 - you want a clean lifecycle reset
 
 Destroy should be considered the final cleanup step for that slot instance.
+
+In addition to explicit destroy calls from the app layer, Android now clears native slot views, host containers, and `NativeAd` objects when the hosting activity reaches `handleOnDestroy()`.
 
 ## Refresh
 
@@ -144,6 +148,11 @@ Common native phases:
 - `failed`
 - `attached`
 - `detached`
+- `preload_start`
+- `preload_reused`
+- `preload_skip_loading`
+- `attach_skipped_same_host`
+- `layout_skipped_same_rect`
 - `clicked`
 - `impression`
 
