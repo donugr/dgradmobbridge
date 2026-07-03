@@ -4,12 +4,14 @@ import android.app.Activity;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Looper;
 import android.graphics.drawable.Drawable;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -32,6 +34,9 @@ import com.google.android.gms.ads.nativead.NativeAdView;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 @CapacitorPlugin(name = "DgrAdmobBridge")
 public class DgrAdmobBridgePlugin extends Plugin {
@@ -45,6 +50,7 @@ public class DgrAdmobBridgePlugin extends Plugin {
     private static final String APPLICATION_ID_METADATA_NAME = "com.google.android.gms.ads.APPLICATION_ID";
     private static final String TEST_NATIVE_AD_UNIT_ID = "ca-app-pub-3940256099942544/2247696110";
     private static final int DEFAULT_NATIVE_MARGIN_DP = 16;
+    private static final String HOST_CONTAINER_TAG_PREFIX = "dgradmobbridge:host:";
 
     private final NativeSlotStore slotStore = new NativeSlotStore();
     private final Map<String, String> placementAdUnitIds = new ConcurrentHashMap<>();
@@ -355,6 +361,32 @@ public class DgrAdmobBridgePlugin extends Plugin {
         return Math.round(dp * density);
     }
 
+    private void runOnUiThreadBlocking(Activity activity, Runnable action) {
+        if (activity == null || action == null) {
+            return;
+        }
+
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run();
+            return;
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        activity.runOnUiThread(() -> {
+            try {
+                action.run();
+            } finally {
+                latch.countDown();
+            }
+        });
+
+        try {
+            latch.await(3, TimeUnit.SECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private void applyHostContainerLayout(FrameLayout hostContainer, NativeCallOptions options) {
         FrameLayout.LayoutParams params;
         ViewGroup.LayoutParams currentParams = hostContainer.getLayoutParams();
@@ -404,7 +436,7 @@ public class DgrAdmobBridgePlugin extends Plugin {
             return null;
         }
 
-        String overlayTag = "dgradmobbridge:host:" + options.hostId;
+        String overlayTag = HOST_CONTAINER_TAG_PREFIX + options.hostId;
         View existing = contentRoot.findViewWithTag(overlayTag);
         if (existing instanceof FrameLayout) {
             FrameLayout existingContainer = (FrameLayout) existing;
@@ -421,14 +453,39 @@ public class DgrAdmobBridgePlugin extends Plugin {
         return hostContainer;
     }
 
+    private void removeHostContainerIfEmpty(ViewGroup parentView) {
+        if (!(parentView instanceof FrameLayout)) {
+            return;
+        }
+
+        Object tag = parentView.getTag();
+        if (!(tag instanceof String) || !String.valueOf(tag).startsWith(HOST_CONTAINER_TAG_PREFIX)) {
+            return;
+        }
+
+        if (parentView.getChildCount() > 0) {
+            return;
+        }
+
+        ViewParent containerParent = parentView.getParent();
+        if (containerParent instanceof ViewGroup) {
+            ((ViewGroup) containerParent).removeView(parentView);
+        }
+    }
+
     private void cleanupSlotView(NativeSlotState slot) {
         if (slot == null) {
             return;
         }
 
-        if (slot.attachedView != null && slot.attachedView.getParent() instanceof ViewGroup) {
-            ((ViewGroup) slot.attachedView.getParent()).removeView(slot.attachedView);
-        }
+        Activity activity = getActivity();
+        runOnUiThreadBlocking(activity, () -> {
+            if (slot.attachedView != null && slot.attachedView.getParent() instanceof ViewGroup) {
+                ViewGroup parentView = (ViewGroup) slot.attachedView.getParent();
+                parentView.removeView(slot.attachedView);
+                removeHostContainerIfEmpty(parentView);
+            }
+        });
         slot.clearViewReference();
     }
 
@@ -717,29 +774,43 @@ public class DgrAdmobBridgePlugin extends Plugin {
             return;
         }
 
-        ViewGroup hostContainer = resolveNativeHostContainer(options);
-        if (hostContainer == null) {
-            slot.markFailed(CODE_NOT_READY, "Unable to resolve native host container.");
+        Activity activity = getActivity();
+        if (activity == null) {
+            slot.markFailed(CODE_NOT_READY, "Activity is unavailable for native attach.");
             notifyNativeFailed(slot, CODE_NOT_READY, slot.lastErrorMessage);
             call.resolve(failure(CODE_NOT_READY, slot.lastErrorMessage, "not_ready"));
             return;
         }
 
-        cleanupSlotView(slot);
-        NativeAdView adView = createAndBindNativeAdView(slot);
-        if (adView == null) {
-            slot.markFailed(CODE_NOT_READY, "Unable to inflate native ad view.");
-            notifyNativeFailed(slot, CODE_NOT_READY, slot.lastErrorMessage);
-            call.resolve(failure(CODE_NOT_READY, slot.lastErrorMessage, "not_ready"));
-            return;
-        }
+        AtomicReference<JSObject> resultRef = new AtomicReference<>();
+        runOnUiThreadBlocking(activity, () -> {
+            ViewGroup hostContainer = resolveNativeHostContainer(options);
+            if (hostContainer == null) {
+                slot.markFailed(CODE_NOT_READY, "Unable to resolve native host container.");
+                notifyNativeFailed(slot, CODE_NOT_READY, slot.lastErrorMessage);
+                resultRef.set(failure(CODE_NOT_READY, slot.lastErrorMessage, "not_ready"));
+                return;
+            }
 
-        hostContainer.removeAllViews();
-        hostContainer.addView(adView);
-        slot.updateIdentity(options.placementId, options.hostId, options.adUnitId, options.ttlMs);
-        slot.markAttached(options.hostId, adView);
-        notifyNativeAttached(slot, "Native ad attached.");
-        call.resolve(success("ready"));
+            cleanupSlotView(slot);
+            NativeAdView adView = createAndBindNativeAdView(slot);
+            if (adView == null) {
+                slot.markFailed(CODE_NOT_READY, "Unable to inflate native ad view.");
+                notifyNativeFailed(slot, CODE_NOT_READY, slot.lastErrorMessage);
+                resultRef.set(failure(CODE_NOT_READY, slot.lastErrorMessage, "not_ready"));
+                return;
+            }
+
+            hostContainer.removeAllViews();
+            hostContainer.addView(adView);
+            slot.updateIdentity(options.placementId, options.hostId, options.adUnitId, options.ttlMs);
+            slot.markAttached(options.hostId, adView);
+            notifyNativeAttached(slot, "Native ad attached.");
+            resultRef.set(success("ready"));
+        });
+
+        JSObject result = resultRef.get();
+        call.resolve(result != null ? result : failure(CODE_NOT_READY, "Native attach did not complete on the UI thread.", "not_ready"));
     }
 
     @PluginMethod
