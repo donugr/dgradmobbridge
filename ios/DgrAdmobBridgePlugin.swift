@@ -21,6 +21,7 @@ public class DgrAdmobBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     private let codeConfigMissing = "CONFIG_MISSING"
     private let codeNotReady = "NOT_READY"
     private let slotStore = NativeSlotStore()
+    private var testMode = false
 
     private func success(status: String, data: [String: Any]? = nil) -> [String: Any] {
         var result: [String: Any] = [
@@ -54,6 +55,7 @@ public class DgrAdmobBridgePlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func configure(_ call: CAPPluginCall) {
         let enabled = call.getBool("enabled") ?? false
+        testMode = call.getBool("testMode") ?? false
         slotStore.setEnabled(enabled)
         call.resolve(success(status: enabled ? "ready" : "disabled"))
     }
@@ -61,7 +63,12 @@ public class DgrAdmobBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func getRuntimeInfo(_ call: CAPPluginCall) {
         call.resolve(success(status: slotStore.enabled ? "ready" : "disabled", data: [
             "platform": "ios",
-            "enabled": slotStore.enabled
+            "enabled": slotStore.enabled,
+            "applicationIdConfigured": false,
+            "applicationIdSource": "missing",
+            "testMode": testMode,
+            "usingTestDevice": false,
+            "placementsConfigured": 0
         ]))
     }
 

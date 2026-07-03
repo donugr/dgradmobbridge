@@ -31,7 +31,26 @@ await DgrAdmobBridge.configure({
 Notes:
 
 - `applicationId` is optional in JS for Android if the app already provides `com.google.android.gms.ads.APPLICATION_ID` in `AndroidManifest.xml`
-- use Google test ad unit ids while integrating and testing
+- `testMode: true` makes the bridge use Google test ad unit ids internally for all supported formats during integration and testing
+- `testMode: false` makes the bridge use real ad unit ids from your `placements` map or explicit `adUnitId`
+- when `testMode: true`, `placements` may still be provided, but Google test ad unit ids are the ones actually used to request ads
+
+Default testing example:
+
+```ts
+await DgrAdmobBridge.configure({
+  enabled: true,
+  testMode: true,
+  placements,
+});
+```
+
+Notes:
+
+- `testMode` is the only runtime switch between testing and live ad-unit behavior
+- Google test mode uses Google demo ad units internally
+- production mode uses ad unit ids from app placements
+- iOS currently keeps contract compatibility but full parity is still in progress
 
 ### 2. Banner example
 
@@ -187,6 +206,13 @@ npx cap sync
 ```
 
 `@capacitor-community/admob` is a required peer dependency.
+
+## Documentation
+
+- [`CHANGELOG.md`](./CHANGELOG.md)
+- [`docs/android-testing.md`](./docs/android-testing.md)
+- [`docs/native-ads-lifecycle.md`](./docs/native-ads-lifecycle.md)
+- [`RELEASING.md`](./RELEASING.md)
 
 ## Android Manifest Requirement
 

@@ -11,6 +11,14 @@ const ERROR_CODES = {
   unsupported: "UNSUPPORTED",
 } as const
 
+const GOOGLE_TEST_AD_UNITS = {
+  banner: "ca-app-pub-3940256099942544/6300978111",
+  interstitial: "ca-app-pub-3940256099942544/1033173712",
+  rewarded: "ca-app-pub-3940256099942544/5224354917",
+  app_open: "ca-app-pub-3940256099942544/9257395921",
+  native: "ca-app-pub-3940256099942544/2247696110",
+} as const
+
 type InternalState = {
   configured: boolean
   enabled: boolean
@@ -51,6 +59,18 @@ function fail<T = undefined>(code: string, message: string, status: BridgeResult
 
 function resolvePlacementAdUnitId(placementId: string, explicitAdUnitId?: string) {
   return String(explicitAdUnitId ?? state.placements[placementId] ?? "").trim()
+}
+
+function resolveAdUnitId(
+  format: keyof typeof GOOGLE_TEST_AD_UNITS,
+  placementId: string,
+  explicitAdUnitId?: string,
+) {
+  if (state.testMode) {
+    return GOOGLE_TEST_AD_UNITS[format]
+  }
+
+  return resolvePlacementAdUnitId(placementId, explicitAdUnitId)
 }
 
 function ensureEnabled<T = undefined>() {
@@ -234,16 +254,21 @@ async function configureNativeBridge(options: ConfigureOptions) {
 }
 
 async function configure(options: ConfigureOptions): Promise<BridgeResult> {
-  state.enabled = options.enabled
-  state.testMode = options.testMode
-  state.applicationId = String(options.applicationId ?? "").trim()
+  const normalizedOptions: ConfigureOptions = {
+    ...options,
+    testMode: Boolean(options.testMode),
+  }
+
+  state.enabled = normalizedOptions.enabled
+  state.testMode = normalizedOptions.testMode
+  state.applicationId = String(normalizedOptions.applicationId ?? "").trim()
   state.placements = {
-    ...(options.placements ?? {}),
+    ...(normalizedOptions.placements ?? {}),
   }
   state.configured = true
 
-  if (!options.enabled) {
-    await configureNativeBridge(options)
+  if (!normalizedOptions.enabled) {
+    await configureNativeBridge(normalizedOptions)
     return ok(undefined, "disabled")
   }
 
@@ -253,11 +278,11 @@ async function configure(options: ConfigureOptions): Promise<BridgeResult> {
   }
 
   await bindStandardAdMobListeners(dependency.module)
-  await configureNativeBridge(options)
+  await configureNativeBridge(normalizedOptions)
 
   if (typeof dependency.module.AdMob.initialize === "function") {
     await invokeCommunityMethod(dependency.module.AdMob, "initialize", {
-      initializeForTesting: options.testMode,
+      initializeForTesting: normalizedOptions.testMode,
     }).catch(() => undefined)
   }
 
@@ -274,6 +299,9 @@ async function getRuntimeInfo(): Promise<BridgeResult<RuntimeInfo>> {
     enabled: state.enabled,
     applicationIdConfigured: Boolean(state.applicationId),
     applicationIdSource: state.applicationId ? "js" : "missing",
+    testMode: state.testMode,
+    usingTestDevice: false,
+    placementsConfigured: Object.keys(state.placements).filter((key) => String(state.placements[key] ?? "").trim().length > 0).length,
   }, state.enabled ? "ready" : "disabled")
 }
 
@@ -378,9 +406,9 @@ async function showBanner(options: BannerOptions): Promise<BridgeResult> {
     return disabled
   }
 
-  const { error, adUnitId } = ensurePlacementAdUnitId(options.placementId, options.adUnitId)
-  if (error) {
-    return error
+  const adUnitId = resolveAdUnitId("banner", options.placementId, options.adUnitId)
+  if (!adUnitId) {
+    return fail(ERROR_CODES.configMissing, `Missing ad unit id for placement "${options.placementId}".`)
   }
 
   const dependency = await ensureCommunityDependency()
@@ -431,9 +459,9 @@ async function preloadInterstitial(options: FullscreenOptions): Promise<BridgeRe
     return disabled
   }
 
-  const { error, adUnitId } = ensurePlacementAdUnitId(options.placementId, options.adUnitId)
-  if (error) {
-    return error
+  const adUnitId = resolveAdUnitId("interstitial", options.placementId, options.adUnitId)
+  if (!adUnitId) {
+    return fail(ERROR_CODES.configMissing, `Missing ad unit id for placement "${options.placementId}".`)
   }
 
   const dependency = await ensureCommunityDependency()
@@ -471,9 +499,9 @@ async function preloadRewarded(options: FullscreenOptions): Promise<BridgeResult
     return disabled
   }
 
-  const { error, adUnitId } = ensurePlacementAdUnitId(options.placementId, options.adUnitId)
-  if (error) {
-    return error
+  const adUnitId = resolveAdUnitId("rewarded", options.placementId, options.adUnitId)
+  if (!adUnitId) {
+    return fail(ERROR_CODES.configMissing, `Missing ad unit id for placement "${options.placementId}".`)
   }
 
   const dependency = await ensureCommunityDependency()
@@ -511,9 +539,9 @@ async function preloadAppOpen(options: FullscreenOptions): Promise<BridgeResult>
     return disabled
   }
 
-  const { error, adUnitId } = ensurePlacementAdUnitId(options.placementId, options.adUnitId)
-  if (error) {
-    return error
+  const adUnitId = resolveAdUnitId("app_open", options.placementId, options.adUnitId)
+  if (!adUnitId) {
+    return fail(ERROR_CODES.configMissing, `Missing ad unit id for placement "${options.placementId}".`)
   }
 
   const dependency = await ensureCommunityDependency()

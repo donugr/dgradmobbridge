@@ -1,6 +1,6 @@
 {
   "name": "@donugr/dgradmobbridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Framework-agnostic Capacitor ads facade with standard ads pass-through and a native ads bridge built on top of @capacitor-community/admob.",
   "type": "module",
   "sideEffects": false,
@@ -72,9 +72,12 @@
     "android/build.gradle",
     "ios/",
     "dist/",
+    "CHANGELOG.md",
     "DgrAdmobBridge.podspec",
     "LICENSE",
     "README.md",
+    "RELEASING.md",
+    "docs/",
     "package.json"
   ]
 }

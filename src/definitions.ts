@@ -34,6 +34,9 @@ export type RuntimeInfo = {
   enabled: boolean
   applicationIdConfigured: boolean
   applicationIdSource: ApplicationIdSource
+  testMode?: boolean
+  usingTestDevice?: boolean
+  placementsConfigured?: number
 }
 
 export type BannerOptions = {

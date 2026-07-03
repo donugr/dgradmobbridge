@@ -43,6 +43,7 @@ public class DgrAdmobBridgePlugin extends Plugin {
     private static final String CODE_APPLICATION_ID_INVALID = "APPLICATION_ID_INVALID";
     private static final String CODE_APPLICATION_ID_NATIVE_READ_FAILED = "APPLICATION_ID_NATIVE_READ_FAILED";
     private static final String APPLICATION_ID_METADATA_NAME = "com.google.android.gms.ads.APPLICATION_ID";
+    private static final String TEST_NATIVE_AD_UNIT_ID = "ca-app-pub-3940256099942544/2247696110";
     private static final int DEFAULT_NATIVE_MARGIN_DP = 16;
 
     private final NativeSlotStore slotStore = new NativeSlotStore();
@@ -208,7 +209,7 @@ public class DgrAdmobBridgePlugin extends Plugin {
             return null;
         }
 
-        String adUnitId = resolveAdUnitId(placementId, explicitAdUnitId);
+        String adUnitId = resolveNativeAdUnitId(placementId, explicitAdUnitId);
         if (TextUtils.isEmpty(adUnitId)) {
             call.resolve(failure(CODE_CONFIG_MISSING, "Missing ad unit id for native placement \"" + placementId + "\".", "error"));
             return null;
@@ -238,12 +239,24 @@ public class DgrAdmobBridgePlugin extends Plugin {
         return "bottom".equals(anchor) ? "bottom" : "top";
     }
 
+    private int resolvePlacementsConfiguredCount() {
+        return placementAdUnitIds.size();
+    }
+
     private String resolveAdUnitId(String placementId, String explicitAdUnitId) {
         if (!TextUtils.isEmpty(explicitAdUnitId)) {
             return explicitAdUnitId.trim();
         }
 
         return String.valueOf(placementAdUnitIds.getOrDefault(placementId, "")).trim();
+    }
+
+    private String resolveNativeAdUnitId(String placementId, String explicitAdUnitId) {
+        if (testMode) {
+            return TEST_NATIVE_AD_UNIT_ID;
+        }
+
+        return resolveAdUnitId(placementId, explicitAdUnitId);
     }
 
     private boolean isValidApplicationId(String value) {
@@ -637,6 +650,8 @@ public class DgrAdmobBridgePlugin extends Plugin {
         data.put("testMode", testMode);
         data.put("applicationIdConfigured", !TextUtils.isEmpty(applicationId));
         data.put("applicationIdSource", applicationIdSource);
+        data.put("usingTestDevice", false);
+        data.put("placementsConfigured", resolvePlacementsConfiguredCount());
         call.resolve(success(slotStore.isEnabled() ? "ready" : "disabled", data));
     }
 
