@@ -130,17 +130,21 @@ async function invokeCommunityMethod<T = unknown>(admob: Record<string, unknown>
 }
 
 async function ensureCommunityDependency<T = undefined>() {
-  const module = await loadCommunityAdmobModule()
-  if (!module?.AdMob) {
+  const loadResult = await loadCommunityAdmobModule()
+  if (!loadResult.module?.AdMob) {
+    const detailSuffix = loadResult.errorMessage ? ` (${loadResult.errorMessage})` : ""
     return {
-      error: fail<T>(ERROR_CODES.dependencyMissing, "Missing required dependency: @capacitor-community/admob"),
+      error: fail<T>(
+        ERROR_CODES.dependencyMissing,
+        `Missing required peer dependency: @capacitor-community/admob. Install it in the app project.${detailSuffix}`,
+      ),
       module: null,
     }
   }
 
   return {
     error: null,
-    module,
+    module: loadResult.module,
   }
 }
 
@@ -154,7 +158,7 @@ async function ensureNativeEventBridge() {
   }).catch(() => null)
 }
 
-async function bindStandardAdMobListeners(module: NonNullable<Awaited<ReturnType<typeof loadCommunityAdmobModule>>>) {
+async function bindStandardAdMobListeners(module: NonNullable<Awaited<ReturnType<typeof loadCommunityAdmobModule>>["module"]>) {
   if (standardListenersBound) {
     return
   }

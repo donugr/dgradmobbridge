@@ -207,6 +207,9 @@ npx cap sync
 
 `@capacitor-community/admob` is a required peer dependency.
 
+This package does not bundle its own copy of `@capacitor-community/admob`.
+Consumer apps must install that dependency directly in the app project, then sync native platforms as usual.
+
 ## Documentation
 
 - [`CHANGELOG.md`](./CHANGELOG.md)
@@ -288,6 +291,10 @@ The plugin should not contain app-specific ad business rules such as cooldown po
 If the peer dependency is missing, `configure()` must fail with a clear runtime error such as:
 
 `DEPENDENCY_MISSING: @capacitor-community/admob`
+
+Current runtime message:
+
+`Missing required peer dependency: @capacitor-community/admob. Install it in the app project.`
 
 ## High-Level Architecture
 
@@ -570,6 +577,8 @@ If the build or runtime is noads:
 ## Installation Strategy
 
 This package should not silently bundle its own copy of `@capacitor-community/admob`.
+
+The dependency loader uses a bundler-friendly literal import path so consuming apps can resolve the peer dependency without app-specific Vite patching in common setups.
 
 ## Native Host Positioning
 

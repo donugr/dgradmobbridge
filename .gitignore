@@ -36,3 +36,6 @@ Pods/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local publish helpers
+npmPublish.mjs

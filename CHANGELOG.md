@@ -4,6 +4,16 @@ All notable changes to `@donugr/dgradmobbridge` will be documented in this file.
 
 The format is inspired by Keep a Changelog and this project follows SemVer pragmatically during the early `0.x` phase.
 
+## [0.1.2] - 2026-07-03
+
+Peer dependency runtime-resolution fix.
+
+### Changed
+
+- plugin peer dependency loader now imports `@capacitor-community/admob` with a bundler-friendly literal import path
+- runtime dependency error now clearly states that the peer dependency must be installed in the consumer app
+- consumer apps should no longer need app-side Vite transform workarounds for the community AdMob dependency check
+
 ## [0.1.1] - 2026-07-03
 
 Documentation and publish-readiness update.

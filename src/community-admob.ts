@@ -8,19 +8,31 @@ type CommunityAdMobModule = {
   AppOpenAdPluginEvents?: Record<string, string>
 }
 
+type CommunityAdmobLoadResult = {
+  module: CommunityAdMobModule | null
+  errorMessage?: string
+}
+
 let cachedModule: CommunityAdMobModule | null | undefined
+let cachedLoadResult: CommunityAdmobLoadResult | undefined
 
 export async function loadCommunityAdmobModule() {
-  if (cachedModule !== undefined) {
-    return cachedModule
+  if (cachedLoadResult !== undefined) {
+    return cachedLoadResult
   }
 
   try {
-    const moduleName = "@capacitor-community/admob"
-    cachedModule = (await import(moduleName)) as CommunityAdMobModule
-  } catch {
+    cachedModule = (await import("@capacitor-community/admob")) as unknown as CommunityAdMobModule
+    cachedLoadResult = {
+      module: cachedModule,
+    }
+  } catch (error) {
     cachedModule = null
+    cachedLoadResult = {
+      module: null,
+      errorMessage: error instanceof Error ? error.message : String(error ?? "Unknown error"),
+    }
   }
 
-  return cachedModule
+  return cachedLoadResult
 }
