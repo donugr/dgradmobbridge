@@ -1,11 +1,12 @@
 Pod::Spec.new do |s|
   s.name = 'DgrAdmobBridge'
-  s.version = '0.1.0'
-  s.summary = 'Framework-agnostic Capacitor ads facade and native ads bridge.'
+  s.version = '0.1.1'
+  s.summary = 'Framework-agnostic Capacitor ads facade with a native ads bridge.'
   s.description = <<-DESC
-    DgrAdmobBridge is a Capacitor plugin package that provides a reusable ads facade,
-    dependency guardrails for @capacitor-community/admob, and a native ads bridge
-    contract intended for Android and iOS apps.
+    DgrAdmobBridge is a reusable Capacitor plugin that provides a framework-agnostic
+    ads facade for standard AdMob flows, dependency guardrails for
+    @capacitor-community/admob, and a native ads bridge contract for Android-first
+    consumer apps with iOS contract compatibility in progress.
   DESC
   s.license = 'MIT'
   s.homepage = 'https://github.com/donugr/dgradmobbridge'
