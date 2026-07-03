@@ -1,6 +1,6 @@
 {
   "name": "@donugr/dgradmobbridge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Framework-agnostic Capacitor ads facade with standard ads pass-through and a native ads bridge built on top of @capacitor-community/admob.",
   "type": "module",
   "sideEffects": false,

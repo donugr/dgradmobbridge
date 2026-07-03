@@ -70,8 +70,8 @@ Before a meaningful public release, prefer verifying with at least one real cons
 npm run release:check
 git status
 git add .
-git commit -m "release: prepare v0.1.0"
-git tag v0.1.0
+git commit -m "release: prepare vx.y.z"
+git tag vx.y.z
 npm publish
 ```
 

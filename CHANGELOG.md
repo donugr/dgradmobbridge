@@ -4,6 +4,23 @@ All notable changes to `@donugr/dgradmobbridge` will be documented in this file.
 
 The format is inspired by Keep a Changelog and this project follows SemVer pragmatically during the early `0.x` phase.
 
+## [0.1.3] - 2026-07-03
+
+Android native ads lifecycle and publish-readiness update.
+
+### Added
+
+- automatic native slot cleanup on Android activity destroy via plugin lifecycle handling
+- native slot runtime diagnostics in `getRuntimeInfo()` for active, loading, and attached slot counts
+- native telemetry events for preload reuse/skip and attach/layout no-op scenarios
+
+### Changed
+
+- native attach now skips identical host re-attach work when the host and layout fingerprint have not changed
+- native host layout updates now avoid unnecessary relayout operations when the effective rect is unchanged
+- native preload and refresh flows now guard against duplicate concurrent loading for the same placement
+- release metadata has been aligned to `0.1.3` across package, Android, and CocoaPods manifests
+
 ## [0.1.2] - 2026-07-03
 
 Peer dependency runtime-resolution fix.

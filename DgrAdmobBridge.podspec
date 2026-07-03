@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = 'DgrAdmobBridge'
-  s.version = '0.1.1'
+  s.version = '0.1.3'
   s.summary = 'Framework-agnostic Capacitor ads facade with a native ads bridge.'
   s.description = <<-DESC
     DgrAdmobBridge is a reusable Capacitor plugin that provides a framework-agnostic
